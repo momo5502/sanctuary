@@ -1,0 +1,35 @@
+[service]
+host = "127.0.0.1"
+port = 43187
+max_workers = 10
+
+[profiles.codex-linux]
+image = "sanctuary/codex-linux:dev"
+working_dir = "/workspace"
+
+[[profiles.codex-linux.mounts]]
+source = "~/.codex"
+target = "/root/.codex"
+read_only = false
+
+[profiles.codex-linux.docker]
+network_mode = "bridge"
+
+[profiles.codex-linux.runtime]
+harness = "codex"
+
+[profiles.codex-windows]
+image = "sanctuary/codex-windows:dev"
+working_dir = "C:\\workspace"
+
+[[profiles.codex-windows.mounts]]
+source = "%USERPROFILE%/.codex"
+target = "C:\\Users\\ContainerAdministrator\\.codex"
+read_only = false
+
+[profiles.codex-windows.docker]
+network_mode = "nat"
+isolation = "hyperv"
+
+[profiles.codex-windows.runtime]
+harness = "codex"
