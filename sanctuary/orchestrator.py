@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import queue
 import socket
@@ -15,6 +16,11 @@ from typing import Any
 
 import docker
 from docker.errors import DockerException, NotFound
+
+try:
+    import pywintypes
+except ImportError:  # pywin32 is only installed on Windows.
+    pywintypes = None
 
 from sanctuary.config import Mount, Settings, WorkerProfile
 from sanctuary.protocol import decode_message, encode_message
@@ -55,8 +61,12 @@ class DockerChannel:
                 part = self.socket.recv(size - len(data))
             except (TimeoutError, socket.timeout):
                 continue
-            except OSError:
+            except (OSError, RuntimeError):
                 return None
+            except Exception as error:
+                if pywintypes and isinstance(error, pywintypes.error):
+                    return None
+                raise
             if not part:
                 return None
             data.extend(part)
@@ -106,14 +116,16 @@ class DockerChannel:
         return await asyncio.to_thread(self.lines.get)
 
     def close(self) -> None:
+        if self.closed:
+            return
         self.closed = True
         try:
             self.socket.shutdown(socket.SHUT_RDWR)
-        except OSError:
+        except (OSError, RuntimeError):
             pass
         try:
             self.socket.close()
-        except OSError:
+        except (OSError, RuntimeError):
             pass
 
 
@@ -177,6 +189,15 @@ class Orchestrator:
         if not prompt.strip():
             raise ValueError("Initial prompt is required")
         profile = self._profile(profile_name)
+        runtime = dict(profile.runtime)
+        if profile.auth_file:
+            if not profile.auth_target:
+                raise ValueError(f"Profile {profile.name!r} sets auth_file but is missing auth_target")
+            with open(profile.auth_file, "rb") as auth_file:
+                runtime["auth_file"] = {
+                    "target": profile.auth_target,
+                    "content_base64": base64.b64encode(auth_file.read()).decode("ascii"),
+                }
         async with self.lock:
             if self.closed:
                 raise RuntimeError("Orchestrator is shutting down")
@@ -237,7 +258,7 @@ class Orchestrator:
                     "worker_id": worker_id,
                     "prompt": prompt,
                     "working_dir": profile.working_dir,
-                    "runtime": profile.runtime,
+                    "runtime": runtime,
                 }
             )
 

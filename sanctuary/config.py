@@ -31,6 +31,8 @@ class WorkerProfile:
     image: str
     working_dir: str | None = None
     mounts: tuple[Mount, ...] = ()
+    auth_file: str | None = None
+    auth_target: str | None = None
     docker_options: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
 
@@ -95,6 +97,8 @@ def load_settings(path: str | Path | None = None) -> Settings:
             image=str(image),
             working_dir=profile.get("working_dir"),
             mounts=mounts,
+            auth_file=expand_path(str(profile["auth_file"])) if profile.get("auth_file") else None,
+            auth_target=str(profile["auth_target"]) if profile.get("auth_target") else None,
             docker_options=docker_options,
             runtime=runtime,
         )

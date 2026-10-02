@@ -6,7 +6,7 @@ Sanctuary has a Python MCP frontend, a local orchestration service, and a small 
 
 ## Current state
 
-This is an early prototype. The service API, MCP tools, worker runtime, and Linux/Windows bootstrap Dockerfiles are in place. Both images build locally, and the Windows worker has completed a live Codex app-server turn. The full MCP/orchestrator lifecycle still needs end-to-end exercise.
+This is an early prototype. The service API, MCP tools, worker runtime, and Linux/Windows bootstrap Dockerfiles are in place. The Windows Codex profile has passed an MCP end-to-end check covering startup with copied credentials, polling, a follow-up message, listing, manual stop, and unexpected container exit. Unexpected exits are retained as failed workers with output and their containers are removed. Testing so far is on one Windows 26H2 host with Docker Hyper-V isolation.
 
 ## Setup
 
@@ -36,9 +36,9 @@ For a Windows worker, switch Docker to Windows containers and use a host that su
 docker build --isolation=hyperv -f images/windows/Dockerfile -t sanctuary/codex-windows:dev .
 ```
 
-The Windows image is large and tied to Windows container host compatibility. Linux and Windows containers may require switching the Docker engine mode; one local engine may not run both OS types at the same time.
+The Windows image is large and tied to Windows container host compatibility. Linux and Windows containers may require switching the Docker engine mode; one local engine may not run both OS types at the same time. On the tested host, the Windows image requires Hyper-V isolation.
 
-Both images install Codex CLI through its npm package. `CODEX_VERSION` is a build argument and defaults to `latest`; the Windows image also uses Node.js 22.22.3. The runtime expects the selected profile to mount the Codex home directory at the matching container user's `~/.codex` location. The example makes this mount writable because Codex stores local thread state there; use a read-only mount only if the mounted contents and Codex behavior you need permit it.
+Both images install Codex CLI through its npm package. `CODEX_VERSION` is a build argument and defaults to `latest`; the Windows image also uses Node.js 22.22.3. The Linux example mounts the Codex home directory because Codex stores local thread state there. The Windows example instead configures `auth_file` and `auth_target` to copy only `auth.json` into the container at startup, avoiding a mount of the full host Codex directory. That file is available to the container until the worker is removed; treat the image and container as trusted with those credentials.
 
 ## MCP tools
 
@@ -52,6 +52,6 @@ The container runtime and orchestrator exchange versioned newline-delimited JSON
 
 ## Configuration notes
 
-Profiles live in the Sanctuary TOML file. A profile selects a prebuilt image, working directory, mounts, Docker options, and runtime settings. Per-worker `mounts` and `docker_options` can be passed to `start_worker` as well. Review host mount source paths and access modes before starting a worker.
+Profiles live in the Sanctuary TOML file. A profile selects a prebuilt image, working directory, mounts, Docker options, and runtime settings. Per-worker `mounts` and `docker_options` can be passed to `start_worker` as well. `auth_file` is a host-side path and `auth_target` is its destination inside the container; only the configured file is sent over the worker's private startup channel. Review host mount source paths and access modes before starting a worker.
 
 The service keeps worker state and output in memory. It removes failed containers after recording their exit status and retains failed worker output until the service exits. Exiting the service stops all its containers and clears state.

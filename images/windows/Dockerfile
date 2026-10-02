@@ -17,6 +17,9 @@ RUN $ErrorActionPreference = 'Stop'; \
     $codexExe = Get-ChildItem -LiteralPath 'C:\npm-global\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor' -Filter codex.exe -Recurse | Select-Object -First 1; \
     if ($null -eq $codexExe) { throw 'The Windows Codex executable was not installed.' }; \
     New-Item -ItemType HardLink -Path C:\npm-global\codex.exe -Target $codexExe.FullName | Out-Null; \
+    $codeModeHost = Get-ChildItem -LiteralPath 'C:\npm-global\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor' -Filter codex-code-mode-host.exe -Recurse | Select-Object -First 1; \
+    if ($null -eq $codeModeHost) { throw 'The Codex command runner was not installed.' }; \
+    New-Item -ItemType HardLink -Path C:\npm-global\codex-code-mode-host.exe -Target $codeModeHost.FullName | Out-Null; \
     codex.cmd --version
 
 ENV PYTHONPATH="C:\app"

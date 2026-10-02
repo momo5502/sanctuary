@@ -11,11 +11,22 @@ from sanctuary import __version__
 
 
 class CodexAppServer:
-    def __init__(self, *, cwd: str, model: str | None = None, approval_policy: str = "never", sandbox: str = "danger-full-access"):
+    def __init__(
+        self,
+        *,
+        cwd: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        approval_policy: str = "never",
+        sandbox: str = "danger-full-access",
+        bypass_hook_trust: bool = False,
+    ):
         self.cwd = cwd
         self.model = model
+        self.reasoning_effort = reasoning_effort
         self.approval_policy = approval_policy
         self.sandbox = sandbox
+        self.bypass_hook_trust = bypass_hook_trust
         self.process: asyncio.subprocess.Process | None = None
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
@@ -27,6 +38,7 @@ class CodexAppServer:
         self._stderr_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        print("Starting Codex app-server", file=sys.stderr, flush=True)
         self.process = await asyncio.create_subprocess_exec(
             "codex",
             "app-server",
@@ -39,6 +51,7 @@ class CodexAppServer:
         )
         self._reader_task = asyncio.create_task(self._read_protocol())
         self._stderr_task = asyncio.create_task(self._copy_stderr())
+        print("Codex app-server process started", file=sys.stderr, flush=True)
         await self.request(
             "initialize",
             {
@@ -50,12 +63,20 @@ class CodexAppServer:
             },
         )
         await self.notify("initialized", {})
+        print("Codex app-server initialized", file=sys.stderr, flush=True)
 
         thread_params: dict[str, Any] = {
             "cwd": self.cwd,
             "approvalPolicy": self.approval_policy,
             "sandbox": self.sandbox,
         }
+        config: dict[str, Any] = {}
+        if self.reasoning_effort:
+            config["model_reasoning_effort"] = self.reasoning_effort
+        if self.bypass_hook_trust:
+            config["bypass_hook_trust"] = True
+        if config:
+            thread_params["config"] = config
         if self.model:
             thread_params["model"] = self.model
         response = await self.request("thread/start", thread_params)
@@ -63,6 +84,7 @@ class CodexAppServer:
         self.thread_id = thread.get("id")
         if not self.thread_id:
             raise RuntimeError("Codex app-server thread/start did not return a thread ID")
+        print("Codex app-server thread started", file=sys.stderr, flush=True)
 
     async def begin_turn(self, text: str) -> None:
         if not self.thread_id:
@@ -86,6 +108,7 @@ class CodexAppServer:
         )
 
     async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        print(f"Codex app-server request started: {method}", file=sys.stderr, flush=True)
         request_id = self.next_id
         self.next_id += 1
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -101,6 +124,7 @@ class CodexAppServer:
         result = response.get("result", {})
         if not isinstance(result, dict):
             raise RuntimeError(f"Codex app-server {method} returned an invalid response")
+        print(f"Codex app-server request completed: {method}", file=sys.stderr, flush=True)
         return result
 
     async def notify(self, method: str, params: dict[str, Any]) -> None:

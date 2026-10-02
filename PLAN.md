@@ -20,7 +20,7 @@ Workers are independent long-lived agents. The system does not assume they are s
 - Keep workers alive until explicitly stopped or until the orchestrator service exits. A stop command terminates the container.
 - Configure a maximum of 10 active workers by default; make the limit configurable in MCP settings.
 - Allow network access by default. Image/profile and start configuration can specify mounts and other Docker settings. The image defines the default working directory and runtime setup.
-- Initially, allow configured mounts of harness credential folders such as `~/.codex` or `~/.claude`. Treat these as sensitive; make read-only mounts the default where practical.
+- Credential delivery is profile-configured. The Windows Codex profile copies only the configured `auth.json` through the private worker startup channel into the container; the Linux example currently mounts the Codex home because the CLI also stores thread state there. Treat credentials and mounts as sensitive.
 - New messages are queued by default while the agent is working. A send parameter can request interruption/steering instead.
 - Poll returns plain agent text only, returns immediately by default, and supports a timeout parameter. By default it returns text since the worker's last poll; a parameter can request the full available conversation text.
 - Track the poll position internally per worker in v1. This means clients polling the same worker advance a shared cursor and can affect what another client sees. Explicit or per-client cursors can be considered later.
@@ -72,7 +72,8 @@ Exact JSON schemas and error behavior will be designed during implementation.
 4. [x] Implement the Python orchestrator: local Docker integration, profile loading, worker limit, start/send/poll/list/stop, failure capture, and service-exit cleanup.
 5. [x] Implement the Python MCP frontend and embedded service discovery/startup behavior.
 6. [x] Add example configuration and local setup documentation.
-7. [ ] Exercise the end-to-end Codex flow on Docker: start, poll text, send a follow-up, list, stop, and inspect an unexpected exit.
+7. [x] Exercise the Windows Codex flow through the MCP stdio frontend: start with copied `auth.json`, poll text, send a follow-up, list, and stop.
+8. [x] Kill a live worker unexpectedly and verify it is marked failed, its output remains pollable, and its container is removed.
 
 ## Deliberately deferred
 
@@ -87,9 +88,8 @@ Exact JSON schemas and error behavior will be designed during implementation.
 
 ## Risks and points to validate
 
-- Windows containers have host/version and runtime constraints that differ from Linux containers. The LTSC 2022 image built and completed a Codex turn on the local Windows 26H2 host with Hyper-V isolation; process isolation did not work on this host.
-- A manual worker `stop` command reports `stopping` but the container remained alive during the Windows smoke test. The orchestrator's Docker stop/removal calls also hung for this container, so worker shutdown and cleanup need investigation before relying on the Windows lifecycle.
-- Docker attach behavior must reliably support bidirectional line-oriented stdin/stdout for the lifetime of a worker. If the selected Docker SDK path makes this fragile, preserve the worker protocol and change only the transport implementation.
-- Mounting user credential directories gives the container access to sensitive auth/configuration data. Keep exact host paths explicit in profiles; Codex's local thread state currently makes a writable Codex home useful, so choose the mount mode deliberately.
+- Windows containers have host/version and runtime constraints that differ from Linux containers. The LTSC 2022 image built and completed the MCP lifecycle checks on the local Windows 26H2 host with Hyper-V isolation; process isolation did not work on this host. Other host versions remain unverified.
+- Docker attach behavior has passed a multi-turn Windows test using bidirectional line-oriented stdin/stdout. Continue validating it on other Docker/host combinations.
+- Copying only `auth.json` avoids exposing the full host Codex directory, but the credential remains accessible inside the worker container until the container is removed. Profile authors must trust the configured target image and tools.
 - Codex app-server protocol and CLI availability can evolve. Keep that integration isolated in the Codex adapter and pin or document the image's Codex version.
 - Since v1 state is in memory, service exit intentionally loses conversation buffers and worker records after terminating containers.

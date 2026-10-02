@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -32,6 +33,7 @@ async def run_worker(first_message: dict[str, Any]) -> int:
         return 2
 
     runtime_config = first_message.get("runtime", {})
+    auth_file = runtime_config.pop("auth_file", None)
     harness = runtime_config.get("harness", os.environ.get("SANCTUARY_HARNESS", "codex"))
     if harness != "codex":
         emit({"type": "error", "fatal": True, "message": f"Unsupported harness: {harness}"})
@@ -40,12 +42,37 @@ async def run_worker(first_message: dict[str, Any]) -> int:
     app_server = CodexAppServer(
         cwd=str(first_message.get("working_dir") or os.environ.get("SANCTUARY_WORKDIR") or os.getcwd()),
         model=runtime_config.get("model"),
+        reasoning_effort=runtime_config.get("reasoning_effort"),
         approval_policy=str(runtime_config.get("approval_policy", "never")),
         sandbox=str(runtime_config.get("sandbox", "danger-full-access")),
+        bypass_hook_trust=bool(runtime_config.get("bypass_hook_trust", False)),
     )
     queued_messages: list[tuple[str, bool]] = []
     active = False
+    pending_text: list[str] = []
+    pending_text_chars = 0
+
+    def flush_text() -> None:
+        nonlocal pending_text_chars
+        if pending_text:
+            emit({"type": "text", "text": "".join(pending_text)})
+            pending_text.clear()
+            pending_text_chars = 0
+
     try:
+        if auth_file is not None:
+            if not isinstance(auth_file, dict) or not isinstance(auth_file.get("target"), str):
+                raise ValueError("Invalid configured auth file")
+            target = auth_file["target"]
+            encoded = auth_file.get("content_base64")
+            if not isinstance(encoded, str):
+                raise ValueError("Invalid configured auth file content")
+            contents = base64.b64decode(encoded, validate=True)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as destination:
+                destination.write(contents)
+            if os.name != "nt":
+                os.chmod(target, 0o600)
         await app_server.start()
         emit({"type": "ready", "worker_id": first_message.get("worker_id")})
         await app_server.begin_turn(prompt)
@@ -56,8 +83,13 @@ async def run_worker(first_message: dict[str, Any]) -> int:
         event_task = asyncio.create_task(app_server.events.get())
         while True:
             completed, _ = await asyncio.wait(
-                {host_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+                {host_task, event_task},
+                timeout=0.05,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            if not completed:
+                flush_text()
+                continue
             if host_task in completed:
                 host_line = host_task.result()
                 if not host_line:
@@ -78,13 +110,18 @@ async def run_worker(first_message: dict[str, Any]) -> int:
                         emit({"type": "error", "fatal": False, "message": "Message text must be a string"})
                         continue
                     interrupt = bool(command.get("interrupt", False))
-                    queued_messages.append((text, interrupt))
-                    if active and interrupt:
-                        try:
-                            await app_server.interrupt()
-                        except RuntimeError as error:
-                            # The turn may finish between receiving and interrupting.
-                            print(f"Codex interrupt was no longer needed: {error}", file=sys.stderr)
+                    if active:
+                        queued_messages.append((text, interrupt))
+                        if interrupt:
+                            try:
+                                await app_server.interrupt()
+                            except RuntimeError as error:
+                                # The turn may finish between receiving and interrupting.
+                                print(f"Codex interrupt was no longer needed: {error}", file=sys.stderr)
+                    else:
+                        await app_server.begin_turn(text)
+                        active = True
+                        emit({"type": "status", "value": "running"})
                 else:
                     emit({"type": "error", "fatal": False, "message": f"Unknown command: {command_type}"})
 
@@ -96,8 +133,12 @@ async def run_worker(first_message: dict[str, Any]) -> int:
                 if method == "item/agentMessage/delta":
                     delta = params.get("delta")
                     if isinstance(delta, str) and delta:
-                        emit({"type": "text", "text": delta})
+                        pending_text.append(delta)
+                        pending_text_chars += len(delta)
+                        if pending_text_chars >= 512:
+                            flush_text()
                 elif method == "turn/completed":
+                    flush_text()
                     turn = params.get("turn", {})
                     turn_status = turn.get("status", params.get("status", "completed"))
                     app_server.active_turn_id = None
@@ -122,6 +163,7 @@ async def run_worker(first_message: dict[str, Any]) -> int:
         emit({"type": "error", "fatal": True, "message": str(error)})
         return 1
     finally:
+        flush_text()
         await app_server.close()
 
 
